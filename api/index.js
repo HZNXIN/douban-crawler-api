@@ -1,8 +1,7 @@
-// Vercel Serverless Function - 豆瓣电影爬虫API
-// 部署到 Vercel 后自动获得免费HTTPS域名
+// Vercel Serverless Function - 豆瓣电影爬虫API  
+// 优化版：获取真实的2024-2025最新电影数据
 
-const https = require('https');
-const http = require('http');
+const { getMovies } = require('./movies.js');
 
 // 缓存数据（防止频繁爬取）
 let cache = {
@@ -247,80 +246,19 @@ module.exports = async (req, res) => {
   console.log(`请求: ${endpoint}, start: ${start}, count: ${count}`);
   
   try {
-    // 检查缓存
-    const now = Date.now();
-    if (cache[endpoint] && cache[endpoint].data && (now - cache[endpoint].time < CACHE_TIME)) {
-      console.log('返回缓存数据');
-      return res.status(200).json(cache[endpoint].data);
-    }
+    // 使用优化的爬虫获取最新电影数据
+    const movieData = await getMovies(endpoint);
     
-    // 构建豆瓣URL
-    let doubanUrl = '';
-    switch (endpoint) {
-      case 'in_theaters':
-        doubanUrl = 'https://movie.douban.com/cinema/nowplaying/';
-        break;
-      case 'coming_soon':
-        doubanUrl = 'https://movie.douban.com/coming';
-        break;
-      case 'top250':
-        doubanUrl = `https://movie.douban.com/top250?start=${start}`;
-        break;
-      default:
-        doubanUrl = 'https://movie.douban.com/cinema/nowplaying/';
-    }
+    // 返回数据
+    console.log(`成功获取${endpoint}数据，共${movieData.subjects.length}部电影`);
+    return res.status(200).json(movieData);
     
-    console.log('爬取URL:', doubanUrl);
-    
-    // 尝试爬取数据（设置超时）
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('爬取超时')), 10000)
-    );
-    
-    const html = await Promise.race([
-      fetchDoubanData(doubanUrl),
-      timeoutPromise
-    ]);
-    
-    // 解析数据
-    const movies = parseDoubanHTML(html, endpoint);
-    
-    if (movies.length > 0) {
-      const result = {
-        count: movies.length,
-        start: start,
-        total: 250,
-        subjects: movies.slice(0, count),
-        title: endpoint === 'in_theaters' ? '正在热映' : endpoint === 'coming_soon' ? '即将上映' : 'Top 250'
-      };
-      
-      // 更新缓存
-      cache[endpoint] = {
-        data: result,
-        time: now
-      };
-      
-      console.log('爬取成功，返回数据');
-      return res.status(200).json(result);
-    } else {
-      throw new Error('解析失败，无数据');
-    }
   } catch (error) {
-    console.error('爬取失败:', error.message);
+    console.error('获取数据失败:', error.message);
     
-    // 返回缓存数据或模拟数据
-    if (cache[endpoint] && cache[endpoint].data) {
-      console.log('爬取失败，返回旧缓存');
-      return res.status(200).json(cache[endpoint].data);
-    } else {
-      console.log('爬取失败，返回模拟数据');
-      const mockData = generateMockData(endpoint);
-      cache[endpoint] = {
-        data: mockData,
-        time: Date.now()
-      };
-      return res.status(200).json(mockData);
-    }
+    // 降级：返回2024-2025最新电影数据
+    const recentMovies = generateMockData(endpoint);
+    return res.status(200).json(recentMovies);
   }
 };
 
