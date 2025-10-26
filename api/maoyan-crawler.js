@@ -4,6 +4,7 @@
  */
 
 const https = require('https');
+const { searchMoviePoster } = require('./tmdb-search.js');
 
 /**
  * 猫眼API接口
@@ -128,33 +129,17 @@ async function fetchMaoyanHTML(type) {
 }
 
 /**
- * 将猫眼图片URL转换为可用的图片URL
- * 解决微信小程序图片显示问题
- * 
- * 当前方案：使用TMDb通用占位图（因为猫眼图片在小程序中返回404）
+ * 获取默认占位图
  */
-function getProxyImageUrl(originalUrl) {
-  if (!originalUrl) return '';
-  
-  // 猫眼图片在微信小程序中会返回404 (User-Agent检测)
-  // 使用TMDb的通用电影海报占位图（完全公开，无限制）
-  // 这是一个通用的电影海报样式，比灰色占位图好看
+function getDefaultPoster() {
   const placeholderImages = [
-    'https://image.tmdb.org/t/p/w500/jRXYjXNq0Cs2TcJjLkki24MLp7u.jpg', // 热辣滚烫
-    'https://image.tmdb.org/t/p/w500/deLWkOLZmBNkm8p16igfapQHqWp.jpg', // 飞驰人生2
-    'https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg', // 沙丘2
-    'https://image.tmdb.org/t/p/w500/kDp1vUBnMpe8ak4rjgl3cLELqjU.jpg', // 功夫熊猫4
-    'https://image.tmdb.org/t/p/w500/kJr0Z6hG6eODq4LYsw1DhwBsYWr.jpg'  // 第二十条
+    'https://image.tmdb.org/t/p/w500/jRXYjXNq0Cs2TcJjLkki24MLp7u.jpg',
+    'https://image.tmdb.org/t/p/w500/deLWkOLZmBNkm8p16igfapQHqWp.jpg',
+    'https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg',
+    'https://image.tmdb.org/t/p/w500/kDp1vUBnMpe8ak4rjgl3cLELqjU.jpg',
+    'https://image.tmdb.org/t/p/w500/kJr0Z6hG6eODq4LYsw1DhwBsYWr.jpg'
   ];
-  
-  // 根据URL hash选择一个占位图（让不同电影显示不同的海报）
-  const hash = originalUrl.split('').reduce((a, b) => {
-    a = ((a << 5) - a) + b.charCodeAt(0);
-    return a & a;
-  }, 0);
-  const index = Math.abs(hash) % placeholderImages.length;
-  
-  return placeholderImages[index];
+  return placeholderImages[Math.floor(Math.random() * placeholderImages.length)];
 }
 
 /**
@@ -191,8 +176,8 @@ function convertMaoyanToDoubanFormat(maoyanMovies, type) {
       min: 0
     };
     
-    // 处理图片URL - 使用代理解决显示问题
-    const proxyPoster = getProxyImageUrl(poster);
+    // 临时使用占位图（后续会被TMDb真实海报替换）
+    const tempPoster = getDefaultPoster();
     
     return {
       id: String(id),
@@ -203,9 +188,9 @@ function convertMaoyanToDoubanFormat(maoyanMovies, type) {
       year: showTime ? showTime.substring(0, 4) : new Date().getFullYear().toString(),
       pubdate: showTime || new Date().toISOString().split('T')[0],
       images: {
-        small: proxyPoster,
-        large: proxyPoster,
-        medium: proxyPoster
+        small: tempPoster,
+        large: tempPoster,
+        medium: tempPoster
       },
       genres: genres,
       directors: directors,
@@ -232,22 +217,76 @@ function convertMaoyanToDoubanFormat(maoyanMovies, type) {
 /**
  * 主函数：获取猫眼电影数据
  * 优先使用API，失败后尝试HTML爬取
+ * 自动从TMDb搜索匹配的海报
  */
 async function getMaoyanMovies(type) {
   try {
     // 优先尝试移动端API
-    return await fetchMaoyanMovies(type);
+    let movieData = await fetchMaoyanMovies(type);
+    
+    // 异步搜索TMDb海报并替换临时占位图
+    movieData = await enrichWithTMDbPosters(movieData);
+    
+    return movieData;
   } catch (err1) {
     console.log('猫眼API失败，尝试HTML爬取...');
     
     try {
       // 备用：HTML爬取
-      return await fetchMaoyanHTML(type);
+      let movieData = await fetchMaoyanHTML(type);
+      
+      // 异步搜索TMDb海报并替换临时占位图
+      movieData = await enrichWithTMDbPosters(movieData);
+      
+      return movieData;
     } catch (err2) {
       console.error('所有猫眼数据源都失败');
       throw new Error('获取猫眼数据失败');
     }
   }
+}
+
+/**
+ * 使用TMDb API搜索并替换电影海报
+ */
+async function enrichWithTMDbPosters(movieData) {
+  if (!movieData || !movieData.subjects) {
+    return movieData;
+  }
+  
+  console.log(`🔍 开始搜索${movieData.subjects.length}部电影的TMDb海报...`);
+  
+  // 并发搜索所有电影的海报
+  const posterPromises = movieData.subjects.map(async (movie) => {
+    try {
+      const posterUrl = await searchMoviePoster(movie.title, movie.year);
+      
+      if (posterUrl) {
+        // 找到海报，替换
+        movie.images = {
+          small: posterUrl,
+          large: posterUrl,
+          medium: posterUrl
+        };
+        console.log(`✅ ${movie.title} → ${posterUrl}`);
+      } else {
+        console.log(`⚠️  ${movie.title} → 使用占位图`);
+      }
+      
+      return movie;
+    } catch (err) {
+      console.error(`❌ 搜索失败: ${movie.title}`, err.message);
+      return movie; // 保留原数据
+    }
+  });
+  
+  // 等待所有搜索完成
+  const enrichedSubjects = await Promise.all(posterPromises);
+  
+  return {
+    ...movieData,
+    subjects: enrichedSubjects
+  };
 }
 
 module.exports = { getMaoyanMovies };
