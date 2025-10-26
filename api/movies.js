@@ -1,5 +1,7 @@
 // 优化版爬虫 - 动态获取当前月份和下月的电影数据
+// 数据来源优先级：1. 猫眼 2. 豆瓣移动端 3. 豆瓣代理 4. Fallback数据
 const https = require('https');
+const { getMaoyanMovies } = require('./maoyan-crawler.js');
 
 // 缓存配置
 let cache = {
@@ -452,53 +454,73 @@ function generateRecentMovies(type) {
 
 /**
  * 主函数：获取电影数据
+ * 数据源优先级：猫眼 → 豆瓣移动端 → 豆瓣代理 → Fallback
  */
 async function getMovies(type) {
   // 检查缓存
   const now = Date.now();
   if (cache[type] && cache[type].data && (now - cache[type].time < CACHE_TIME)) {
-    console.log('返回缓存数据');
+    console.log('✅ 返回缓存数据');
     return cache[type].data;
   }
   
+  // 优先级1：猫眼电影（最推荐）
   try {
-    // 优先尝试豆瓣移动端API
-    console.log('尝试豆瓣移动端API...');
-    const data = await fetchFromDoubanMobileAPI(type);
-    const processed = {
-      ...data,
-      subjects: processMovieData(data.subjects)
-    };
+    console.log('🎬 尝试猫眼电影API...');
+    const maoyanData = await getMaoyanMovies(type);
+    console.log(`✅ 猫眼数据获取成功: ${maoyanData.subjects.length}部电影`);
     
-    // 更新缓存
-    cache[type] = { data: processed, time: now };
-    return processed;
+    // 猫眼数据已经处理过，直接使用
+    cache[type] = { data: maoyanData, time: now };
+    return maoyanData;
     
-  } catch (err1) {
-    console.log('豆瓣移动端API失败，尝试代理API...');
+  } catch (errMaoyan) {
+    console.log(`⚠️ 猫眼失败: ${errMaoyan.message}，尝试豆瓣...`);
     
+    // 优先级2：豆瓣移动端API
     try {
-      // 尝试代理API
-      const data = await fetchFromProxyAPI(type);
+      console.log('🎬 尝试豆瓣移动端API...');
+      const data = await fetchFromDoubanMobileAPI(type);
       const processed = {
         ...data,
-        subjects: processMovieData(data.subjects)
+        subjects: processMovieData(data.subjects),
+        source: 'douban'
       };
       
       cache[type] = { data: processed, time: now };
+      console.log(`✅ 豆瓣数据获取成功: ${processed.subjects.length}部电影`);
       return processed;
       
-    } catch (err2) {
-      console.log('所有API都失败，使用最新电影数据...');
+    } catch (err1) {
+      console.log('⚠️ 豆瓣移动端API失败，尝试代理...');
       
-      // 返回缓存或最新的真实电影数据
-      if (cache[type] && cache[type].data) {
-        return cache[type].data;
+      // 优先级3：豆瓣代理API
+      try {
+        const data = await fetchFromProxyAPI(type);
+        const processed = {
+          ...data,
+          subjects: processMovieData(data.subjects),
+          source: 'douban-proxy'
+        };
+        
+        cache[type] = { data: processed, time: now };
+        console.log(`✅ 豆瓣代理数据获取成功: ${processed.subjects.length}部电影`);
+        return processed;
+        
+      } catch (err2) {
+        console.log('⚠️ 所有在线数据源都失败，使用Fallback数据...');
+        
+        // 优先级4：返回缓存或Fallback数据
+        if (cache[type] && cache[type].data) {
+          console.log('✅ 返回旧缓存数据');
+          return cache[type].data;
+        }
+        
+        const recentData = generateRecentMovies(type);
+        cache[type] = { data: recentData, time: now };
+        console.log(`✅ 返回Fallback数据: ${recentData.subjects.length}部电影`);
+        return recentData;
       }
-      
-      const recentData = generateRecentMovies(type);
-      cache[type] = { data: recentData, time: now };
-      return recentData;
     }
   }
 }
