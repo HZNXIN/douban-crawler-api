@@ -1,0 +1,24 @@
+{
+  "name": "douban-movie-crawler-api",
+  "version": "1.0.0",
+  "description": "豆瓣电影爬虫API服务 - 部署到Vercel",
+  "main": "api/index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "keywords": [
+    "douban",
+    "movie",
+    "crawler",
+    "api",
+    "vercel"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "vercel": "^32.0.0"
+  }
+}
+
