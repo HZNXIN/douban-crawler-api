@@ -130,24 +130,14 @@ async function fetchMaoyanHTML(type) {
 /**
  * 将猫眼图片URL转换为代理URL
  * 解决微信小程序图片显示问题
+ * 
+ * 当前方案：直接使用猫眼原图（需要在小程序配置域名白名单）
  */
 function getProxyImageUrl(originalUrl) {
   if (!originalUrl) return '';
   
-  // 如果已经是代理URL，直接返回
-  if (originalUrl.includes('douban-crawler-api.vercel.app')) {
-    return originalUrl;
-  }
-  
-  // 方案1：使用自己的图片代理（推荐）
-  const proxyBase = 'https://douban-crawler-api.vercel.app/api/image-proxy';
-  return `${proxyBase}?url=${encodeURIComponent(originalUrl)}`;
-  
-  // 方案2：如果猫眼图片可以直接访问，可以使用原URL
-  // return originalUrl;
-  
-  // 方案3：使用TMDb作为备用（需要额外配置）
-  // return originalUrl.replace('p0.pipi.cn', 'image.tmdb.org/t/p/w500');
+  // 直接返回猫眼原始图片URL
+  return originalUrl;
 }
 
 /**
