@@ -95,14 +95,22 @@ async function fetchMovieDetail(movieId) {
  */
 function fetchFromMobileAPI(movieId) {
   return new Promise((resolve, reject) => {
+    // 使用更完整的移动端请求头
     const options = {
       hostname: 'api.maoyan.com',
       path: `/mmdb/movie/v5/detail/${movieId}.json`,
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15',
-        'Accept': 'application/json',
-        'Referer': 'https://m.maoyan.com/'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.38(0x18002631) NetType/WIFI Language/zh_CN',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://m.maoyan.com/',
+        'Origin': 'https://m.maoyan.com',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-site'
       }
     };
 
@@ -111,6 +119,7 @@ function fetchFromMobileAPI(movieId) {
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
+          console.log('📊 API响应前100字符:', data.substring(0, 100));
           const json = JSON.parse(data);
           if (json.data && json.data.basic) {
             resolve(parseMobileAPIData(json.data, movieId));
@@ -130,23 +139,40 @@ function fetchFromMobileAPI(movieId) {
  */
 function fetchFromMobileWeb(movieId) {
   return new Promise((resolve, reject) => {
+    // 完整模拟移动端浏览器
     const options = {
       hostname: 'm.maoyan.com',
       path: `/movie/${movieId}`,
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15',
-        'Accept': 'text/html',
-        'Referer': 'https://m.maoyan.com/'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://m.maoyan.com/',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Cache-Control': 'max-age=0'
       }
     };
 
     https.get(options, (res) => {
+      // 跟随重定向
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        console.log('🔄 检测到重定向，跳过');
+        reject(new Error('被重定向'));
+        return;
+      }
+      
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
           console.log('📱 移动端HTML长度:', data.length);
+          console.log('📱 HTML前200字符:', data.substring(0, 200));
           if (data.length < 1000) {
             reject(new Error('HTML内容过短'));
             return;
@@ -165,25 +191,47 @@ function fetchFromMobileWeb(movieId) {
  */
 function fetchFromPCWeb(movieId) {
   return new Promise((resolve, reject) => {
+    // 完整模拟Chrome浏览器
     const options = {
       hostname: 'www.maoyan.com',
       path: `/films/${movieId}`,
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
         'Referer': 'https://www.maoyan.com/',
-        'Cookie': '_lxsdk_cuid=test; _lxsdk=test'
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+        'Cookie': '__mta=87539764.1234567890.1234567890.1234567890.1; uuid_n_v=v1; uuid=ABCD1234; _lxsdk_cuid=abc123; _lxsdk=abc123; _csrf=xyz789'
       }
     };
 
     https.get(options, (res) => {
+      // 跟随重定向
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        console.log('🔄 检测到重定向');
+        reject(new Error('被重定向'));
+        return;
+      }
+      
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
           console.log('💻 PC端HTML长度:', data.length);
+          console.log('💻 PC端状态码:', res.statusCode);
+          console.log('💻 HTML前200字符:', data.substring(0, 200));
+          
           if (data.length < 1000) {
             reject(new Error('HTML内容过短，可能被拦截'));
             return;
