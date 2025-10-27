@@ -53,45 +53,170 @@ module.exports = async (req, res) => {
 };
 
 /**
- * 获取电影详情（使用猫眼电影ID）
+ * 获取电影详情（优先使用移动端API，备用PC页面）
  */
-function fetchMovieDetail(movieId) {
+async function fetchMovieDetail(movieId) {
+  // 方法1: 尝试移动端API
+  try {
+    console.log('🔄 尝试方法1: 移动端API');
+    const apiDetail = await fetchFromMobileAPI(movieId);
+    if (apiDetail && apiDetail.title !== '未知电影') {
+      console.log('✅ 移动端API成功');
+      return apiDetail;
+    }
+  } catch (err) {
+    console.log('⚠️ 移动端API失败:', err.message);
+  }
+  
+  // 方法2: 尝试移动端网页
+  try {
+    console.log('🔄 尝试方法2: 移动端网页');
+    const mobileDetail = await fetchFromMobileWeb(movieId);
+    if (mobileDetail && mobileDetail.title !== '未知电影') {
+      console.log('✅ 移动端网页成功');
+      return mobileDetail;
+    }
+  } catch (err) {
+    console.log('⚠️ 移动端网页失败:', err.message);
+  }
+  
+  // 方法3: PC网页（最后尝试）
+  try {
+    console.log('🔄 尝试方法3: PC网页');
+    return await fetchFromPCWeb(movieId);
+  } catch (err) {
+    console.log('⚠️ PC网页失败:', err.message);
+    throw new Error('所有获取方法都失败了');
+  }
+}
+
+/**
+ * 方法1: 从移动端API获取（最稳定）
+ */
+function fetchFromMobileAPI(movieId) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.maoyan.com',
+      path: `/mmdb/movie/v5/detail/${movieId}.json`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15',
+        'Accept': 'application/json',
+        'Referer': 'https://m.maoyan.com/'
+      }
+    };
+
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.data && json.data.basic) {
+            resolve(parseMobileAPIData(json.data, movieId));
+          } else {
+            reject(new Error('API返回数据格式错误'));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+/**
+ * 方法2: 从移动端网页获取
+ */
+function fetchFromMobileWeb(movieId) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'm.maoyan.com',
+      path: `/movie/${movieId}`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15',
+        'Accept': 'text/html',
+        'Referer': 'https://m.maoyan.com/'
+      }
+    };
+
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          console.log('📱 移动端HTML长度:', data.length);
+          if (data.length < 1000) {
+            reject(new Error('HTML内容过短'));
+            return;
+          }
+          resolve(parseMovieDetailHTML(data, movieId));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+/**
+ * 方法3: 从PC网页获取
+ */
+function fetchFromPCWeb(movieId) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: 'www.maoyan.com',
       path: `/films/${movieId}`,
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Referer': 'https://www.maoyan.com/',
-        'Connection': 'keep-alive'
+        'Cookie': '_lxsdk_cuid=test; _lxsdk=test'
       }
     };
 
     https.get(options, (res) => {
       let data = '';
-      
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      
+      res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
-          const detail = parseMovieDetailHTML(data, movieId);
-          console.log(`✅ 成功解析电影详情: ${detail.title}`);
-          resolve(detail);
+          console.log('💻 PC端HTML长度:', data.length);
+          if (data.length < 1000) {
+            reject(new Error('HTML内容过短，可能被拦截'));
+            return;
+          }
+          resolve(parseMovieDetailHTML(data, movieId));
         } catch (err) {
-          console.error('❌ 解析电影详情失败:', err.message);
           reject(err);
         }
       });
-    }).on('error', (err) => {
-      console.error('❌ 请求电影详情失败:', err.message);
-      reject(err);
-    });
+    }).on('error', reject);
   });
+}
+
+/**
+ * 解析移动端API返回的数据
+ */
+function parseMobileAPIData(data, movieId) {
+  const basic = data.basic || {};
+  const story = data.story || {};
+  
+  return {
+    id: movieId,
+    title: basic.name || basic.nm || '未知电影',
+    summary: story.brief || story.summary || basic.story || '暂无剧情简介',
+    category: basic.type || basic.cat || '未知',
+    country: basic.releaseArea || basic.src || '未知',
+    duration: basic.mins ? `${basic.mins}分钟` : '未知',
+    releaseDate: basic.releaseDate || basic.rt || '未知',
+    director: basic.director?.name || basic.dir || '未知',
+    actors: basic.actors?.map(a => a.name).join(' / ') || basic.star || '暂无',
+    score: basic.overallRating ? String(basic.overallRating) : basic.sc || '暂无评分',
+    ratingCount: basic.personCount || basic.wish || '0'
+  };
 }
 
 /**
