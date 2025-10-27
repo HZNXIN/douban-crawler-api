@@ -485,33 +485,98 @@ function parseMovieDetailHTML(html, movieId) {
   const $ = cheerio.load(html);
   
   console.log('🔍 开始解析 HTML，长度:', html.length);
+  console.log('📄 HTML前2000字符:', html.substring(0, 2000));
   
   // ========== 方法1: 尝试从内嵌的 JSON 数据中提取 ==========
-  try {
-    // 猫眼通常在页面中嵌入 JSON 数据
-    const scriptMatch = html.match(/<script[^>]*>\s*var\s+__INITIAL_STATE__\s*=\s*({.*?})\s*<\/script>/s);
-    if (scriptMatch) {
-      const jsonData = JSON.parse(scriptMatch[1]);
-      console.log('✅ 找到内嵌 JSON 数据');
-      
-      // 从 JSON 中提取信息
-      if (jsonData.movieDetailModel || jsonData.detailMovie) {
-        const movie = jsonData.movieDetailModel || jsonData.detailMovie;
-        return extractFromJSON(movie, movieId);
+  // 尝试多种可能的变量名
+  const jsonPatterns = [
+    /<script[^>]*>\s*var\s+__INITIAL_STATE__\s*=\s*({.*?})\s*<\/script>/s,
+    /<script[^>]*>\s*window\.__INITIAL_STATE__\s*=\s*({.*?})\s*<\/script>/s,
+    /<script[^>]*>\s*var\s+movieDetailModel\s*=\s*({.*?})\s*<\/script>/s,
+    /<script[^>]*>\s*var\s+detailInfo\s*=\s*({.*?})\s*<\/script>/s,
+    /<script\s+type="application\/json"[^>]*>(.*?)<\/script>/s
+  ];
+  
+  for (const pattern of jsonPatterns) {
+    try {
+      const scriptMatch = html.match(pattern);
+      if (scriptMatch) {
+        console.log('✅ 找到内嵌 JSON 数据（模式匹配）');
+        const jsonStr = scriptMatch[1];
+        const jsonData = JSON.parse(jsonStr);
+        console.log('📊 JSON数据键:', Object.keys(jsonData).join(', '));
+        
+        // 尝试不同的数据结构
+        const movie = jsonData.movieDetailModel || 
+                     jsonData.detailMovie || 
+                     jsonData.movie || 
+                     jsonData.data ||
+                     jsonData;
+        
+        if (movie && (movie.nm || movie.name || movie.title)) {
+          console.log('✅ 从JSON提取到电影数据');
+          return extractFromJSON(movie, movieId);
+        }
       }
+    } catch (err) {
+      console.log('⚠️ JSON模式解析失败:', err.message);
     }
+  }
+  
+  // 尝试从所有script标签中查找JSON数据
+  try {
+    console.log('🔍 遍历所有script标签...');
+    $('script').each((i, elem) => {
+      const scriptContent = $(elem).html();
+      if (scriptContent && scriptContent.includes('movieInfo') || scriptContent.includes('detailMovie')) {
+        console.log(`📝 找到可能包含数据的script标签 #${i}`);
+        console.log('前200字符:', scriptContent.substring(0, 200));
+      }
+    });
   } catch (err) {
-    console.log('⚠️ JSON 解析失败，尝试 HTML 解析');
+    console.log('⚠️ 遍历script失败');
   }
   
   // ========== 方法2: HTML CSS 选择器解析（多种选择器） ==========
   
+  // ========== 方法2.5: 从meta标签提取 ==========
+  try {
+    const ogTitle = $('meta[property="og:title"]').attr('content');
+    const ogDescription = $('meta[property="og:description"]').attr('content');
+    const ogImage = $('meta[property="og:image"]').attr('content');
+    
+    if (ogTitle) {
+      console.log('✅ 从meta标签找到标题:', ogTitle);
+      if (ogDescription) {
+        console.log('✅ 从meta标签找到简介:', ogDescription.substring(0, 100));
+      }
+      
+      return {
+        id: movieId,
+        title: ogTitle,
+        summary: ogDescription || '暂无剧情简介',
+        category: '未知',
+        country: '未知',
+        duration: '未知',
+        releaseDate: '未知',
+        director: '未知',
+        actors: '暂无',
+        score: '暂无评分',
+        ratingCount: '0'
+      };
+    }
+  } catch (err) {
+    console.log('⚠️ meta标签解析失败');
+  }
+  
   // 提取标题（多种选择器）
   const title = $('.movie-brief-container .name').text().trim() || 
-                $('h1.name').text().trim() || 
+                $('h1.name').text().trim() ||
                 $('.movie-brief h1').text().trim() ||
                 $('h3.name').text().trim() ||
                 $('.film-name').text().trim() ||
+                $('meta[property="og:title"]').attr('content') ||
+                $('title').text().replace('猫眼电影', '').replace('-', '').trim() ||
                 '未知电影';
   
   console.log('📝 标题:', title);
@@ -600,6 +665,22 @@ function parseMovieDetailHTML(html, movieId) {
                      '0';
   
   console.log('✅ HTML 解析完成');
+  
+  // 如果标题仍然是"未知电影"，输出诊断信息
+  if (title === '未知电影') {
+    console.log('⚠️ 未能提取标题，输出诊断信息：');
+    console.log('📋 页面title标签:', $('title').text());
+    console.log('📋 所有h1标签:', $('h1').map((i, el) => $(el).text().trim()).get().join(' | '));
+    console.log('📋 所有h2标签:', $('h2').map((i, el) => $(el).text().trim()).get().join(' | '));
+    console.log('📋 所有meta标签:');
+    $('meta').each((i, el) => {
+      const name = $(el).attr('name') || $(el).attr('property');
+      const content = $(el).attr('content');
+      if (name && content) {
+        console.log(`  ${name}: ${content.substring(0, 100)}`);
+      }
+    });
+  }
   
   return {
     id: movieId,
