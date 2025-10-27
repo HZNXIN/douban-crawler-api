@@ -2,6 +2,7 @@
 // 获取单个电影的完整详情信息（真实剧情简介）
 
 const https = require('https');
+const zlib = require('zlib');
 const cheerio = require('cheerio');
 
 // TMDb配置
@@ -110,24 +111,37 @@ async function fetchMovieDetail(movieId) {
  * 🌟 方法0: 从TMDb获取（最稳定、最优先）
  */
 async function fetchFromTMDb(maoyanId) {
-  // 第一步：从猫眼API获取电影名称（用于TMDb搜索）
+  // 第一步：先尝试从猫眼获取基本信息
+  let maoyanBasicInfo = null;
   let movieTitle = null;
+  
   try {
-    const maoyanData = await fetchFromMobileAPI(maoyanId);
-    movieTitle = maoyanData.title;
-    console.log('📝 从猫眼获取电影名:', movieTitle);
+    console.log('📝 尝试从猫眼获取基本信息...');
+    maoyanBasicInfo = await fetchFromMobileAPI(maoyanId);
+    movieTitle = maoyanBasicInfo.title;
+    console.log('✅ 从猫眼获取电影名:', movieTitle);
   } catch (err) {
-    console.log('⚠️ 无法从猫眼获取电影名，使用ID搜索');
+    console.log('⚠️ 无法从猫眼获取电影名:', err.message);
+    throw new Error('无法获取电影名称进行TMDb搜索');
   }
   
   // 第二步：在TMDb搜索电影
-  const tmdbId = await searchTMDb(movieTitle || maoyanId);
-  if (!tmdbId) {
-    throw new Error('TMDb搜索无结果');
+  try {
+    const tmdbId = await searchTMDb(movieTitle);
+    if (!tmdbId) {
+      console.log('⚠️ TMDb搜索无结果，使用猫眼数据');
+      // 如果TMDb搜索不到，直接返回猫眼数据
+      return maoyanBasicInfo;
+    }
+    
+    // 第三步：获取TMDb详情（包含猫眼的部分信息）
+    console.log(`🎬 找到TMDb ID: ${tmdbId}，获取详情...`);
+    return await getTMDbDetail(tmdbId, maoyanId, maoyanBasicInfo);
+  } catch (err) {
+    console.log('⚠️ TMDb处理失败，使用猫眼数据:', err.message);
+    // 如果TMDb失败，返回猫眼数据
+    return maoyanBasicInfo;
   }
-  
-  // 第三步：获取TMDb详情
-  return await getTMDbDetail(tmdbId, maoyanId);
 }
 
 /**
@@ -167,11 +181,11 @@ function searchTMDb(query) {
 }
 
 /**
- * 获取TMDb电影详情
+ * 获取TMDb电影详情（合并猫眼数据）
  */
-function getTMDbDetail(tmdbId, maoyanId) {
+function getTMDbDetail(tmdbId, maoyanId, maoyanBasicInfo) {
   return new Promise((resolve, reject) => {
-    const path = `/3/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=zh-CN`;
+    const path = `/3/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=zh-CN&append_to_response=credits`;
     
     const options = {
       hostname: TMDB_BASE_URL,
@@ -188,24 +202,63 @@ function getTMDbDetail(tmdbId, maoyanId) {
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
-          resolve({
+          
+          // 提取导演和演员信息
+          let director = '未知';
+          let actors = '暂无';
+          
+          if (json.credits) {
+            // 提取导演
+            const directors = json.credits.crew?.filter(c => c.job === 'Director') || [];
+            if (directors.length > 0) {
+              director = directors.map(d => d.name).join(', ');
+            }
+            
+            // 提取演员（前5位）
+            const cast = json.credits.cast?.slice(0, 5) || [];
+            if (cast.length > 0) {
+              actors = cast.map(c => c.name).join(' / ');
+            }
+          }
+          
+          // 优先使用TMDb数据，但保留猫眼的部分信息
+          const result = {
             id: maoyanId,
-            title: json.title || json.original_title || '未知电影',
-            summary: json.overview || '暂无剧情简介',
-            category: json.genres ? json.genres.map(g => g.name).join('/') : '未知',
-            country: json.production_countries ? json.production_countries.map(c => c.name).join('/') : '未知',
-            duration: json.runtime ? `${json.runtime}分钟` : '未知',
-            releaseDate: json.release_date || '未知',
-            director: '未知', // TMDb需要额外请求credits
-            actors: '暂无', // TMDb需要额外请求credits
-            score: json.vote_average ? String(json.vote_average.toFixed(1)) : '暂无评分',
-            ratingCount: json.vote_count ? String(json.vote_count) : '0'
-          });
+            title: json.title || json.original_title || maoyanBasicInfo?.title || '未知电影',
+            summary: json.overview || maoyanBasicInfo?.summary || '暂无剧情简介',
+            category: json.genres ? json.genres.map(g => g.name).join('/') : (maoyanBasicInfo?.category || '未知'),
+            country: json.production_countries ? json.production_countries.map(c => c.name).join('/') : (maoyanBasicInfo?.country || '未知'),
+            duration: json.runtime ? `${json.runtime}分钟` : (maoyanBasicInfo?.duration || '未知'),
+            releaseDate: json.release_date || maoyanBasicInfo?.releaseDate || '未知',
+            director: director !== '未知' ? director : (maoyanBasicInfo?.director || '未知'),
+            actors: actors !== '暂无' ? actors : (maoyanBasicInfo?.actors || '暂无'),
+            score: json.vote_average ? String(json.vote_average.toFixed(1)) : (maoyanBasicInfo?.score || '暂无评分'),
+            ratingCount: json.vote_count ? String(json.vote_count) : (maoyanBasicInfo?.ratingCount || '0')
+          };
+          
+          console.log('✅ TMDb详情合并完成:', result.title);
+          resolve(result);
         } catch (err) {
-          reject(err);
+          console.error('❌ 解析TMDb数据失败:', err.message);
+          // 如果解析失败，返回猫眼数据
+          if (maoyanBasicInfo) {
+            console.log('📌 使用猫眼备用数据');
+            resolve(maoyanBasicInfo);
+          } else {
+            reject(err);
+          }
         }
       });
-    }).on('error', reject);
+    }).on('error', (err) => {
+      console.error('❌ 请求TMDb失败:', err.message);
+      // 如果请求失败，返回猫眼数据
+      if (maoyanBasicInfo) {
+        console.log('📌 使用猫眼备用数据');
+        resolve(maoyanBasicInfo);
+      } else {
+        reject(err);
+      }
+    });
   });
 }
 
@@ -234,11 +287,30 @@ function fetchFromMobileAPI(movieId) {
     };
 
     https.get(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      const buffers = [];
+      
+      res.on('data', (chunk) => {
+        buffers.push(chunk);
+      });
+      
       res.on('end', () => {
         try {
-          console.log('📊 API响应前100字符:', data.substring(0, 100));
+          const buffer = Buffer.concat(buffers);
+          
+          // 检查是否是gzip压缩
+          let data;
+          if (res.headers['content-encoding'] === 'gzip') {
+            console.log('📦 检测到gzip压缩，正在解压...');
+            data = zlib.gunzipSync(buffer).toString();
+          } else if (res.headers['content-encoding'] === 'deflate') {
+            console.log('📦 检测到deflate压缩，正在解压...');
+            data = zlib.inflateSync(buffer).toString();
+          } else {
+            data = buffer.toString();
+          }
+          
+          console.log('📊 解压后数据前100字符:', data.substring(0, 100));
+          
           const json = JSON.parse(data);
           if (json.data && json.data.basic) {
             resolve(parseMobileAPIData(json.data, movieId));
@@ -246,6 +318,7 @@ function fetchFromMobileAPI(movieId) {
             reject(new Error('API返回数据格式错误'));
           }
         } catch (err) {
+          console.error('❌ 解析失败:', err.message);
           reject(err);
         }
       });
@@ -343,10 +416,28 @@ function fetchFromPCWeb(movieId) {
         return;
       }
       
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      const buffers = [];
+      
+      res.on('data', (chunk) => {
+        buffers.push(chunk);
+      });
+      
       res.on('end', () => {
         try {
+          const buffer = Buffer.concat(buffers);
+          
+          // 检查是否是gzip压缩
+          let data;
+          if (res.headers['content-encoding'] === 'gzip') {
+            console.log('📦 检测到gzip压缩，正在解压...');
+            data = zlib.gunzipSync(buffer).toString();
+          } else if (res.headers['content-encoding'] === 'deflate') {
+            console.log('📦 检测到deflate压缩，正在解压...');
+            data = zlib.inflateSync(buffer).toString();
+          } else {
+            data = buffer.toString();
+          }
+          
           console.log('💻 PC端HTML长度:', data.length);
           console.log('💻 PC端状态码:', res.statusCode);
           console.log('💻 HTML前200字符:', data.substring(0, 200));
@@ -357,6 +448,7 @@ function fetchFromPCWeb(movieId) {
           }
           resolve(parseMovieDetailHTML(data, movieId));
         } catch (err) {
+          console.error('❌ 解析失败:', err.message);
           reject(err);
         }
       });
@@ -416,7 +508,7 @@ function parseMovieDetailHTML(html, movieId) {
   
   // 提取标题（多种选择器）
   const title = $('.movie-brief-container .name').text().trim() || 
-                $('h1.name').text().trim() ||
+                $('h1.name').text().trim() || 
                 $('.movie-brief h1').text().trim() ||
                 $('h3.name').text().trim() ||
                 $('.film-name').text().trim() ||
