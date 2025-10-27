@@ -4,6 +4,10 @@
 const https = require('https');
 const cheerio = require('cheerio');
 
+// TMDb配置
+const TMDB_API_KEY = '38980626fa1917ab5bb56f08350320b2';
+const TMDB_BASE_URL = 'api.themoviedb.org';
+
 /**
  * 主处理函数
  */
@@ -53,12 +57,24 @@ module.exports = async (req, res) => {
 };
 
 /**
- * 获取电影详情（优先使用移动端API，备用PC页面）
+ * 获取电影详情（优先使用TMDb，备用猫眼）
  */
 async function fetchMovieDetail(movieId) {
+  // 🌟 方法0: 尝试TMDb（最优先，最稳定）
+  try {
+    console.log('🔄 尝试方法0: TMDb API（官方）');
+    const tmdbDetail = await fetchFromTMDb(movieId);
+    if (tmdbDetail && tmdbDetail.title !== '未知电影') {
+      console.log('✅ TMDb API成功');
+      return tmdbDetail;
+    }
+  } catch (err) {
+    console.log('⚠️ TMDb失败:', err.message);
+  }
+  
   // 方法1: 尝试移动端API
   try {
-    console.log('🔄 尝试方法1: 移动端API');
+    console.log('🔄 尝试方法1: 猫眼移动端API');
     const apiDetail = await fetchFromMobileAPI(movieId);
     if (apiDetail && apiDetail.title !== '未知电影') {
       console.log('✅ 移动端API成功');
@@ -70,7 +86,7 @@ async function fetchMovieDetail(movieId) {
   
   // 方法2: 尝试移动端网页
   try {
-    console.log('🔄 尝试方法2: 移动端网页');
+    console.log('🔄 尝试方法2: 猫眼移动端网页');
     const mobileDetail = await fetchFromMobileWeb(movieId);
     if (mobileDetail && mobileDetail.title !== '未知电影') {
       console.log('✅ 移动端网页成功');
@@ -82,12 +98,115 @@ async function fetchMovieDetail(movieId) {
   
   // 方法3: PC网页（最后尝试）
   try {
-    console.log('🔄 尝试方法3: PC网页');
+    console.log('🔄 尝试方法3: 猫眼PC网页');
     return await fetchFromPCWeb(movieId);
   } catch (err) {
     console.log('⚠️ PC网页失败:', err.message);
     throw new Error('所有获取方法都失败了');
   }
+}
+
+/**
+ * 🌟 方法0: 从TMDb获取（最稳定、最优先）
+ */
+async function fetchFromTMDb(maoyanId) {
+  // 第一步：从猫眼API获取电影名称（用于TMDb搜索）
+  let movieTitle = null;
+  try {
+    const maoyanData = await fetchFromMobileAPI(maoyanId);
+    movieTitle = maoyanData.title;
+    console.log('📝 从猫眼获取电影名:', movieTitle);
+  } catch (err) {
+    console.log('⚠️ 无法从猫眼获取电影名，使用ID搜索');
+  }
+  
+  // 第二步：在TMDb搜索电影
+  const tmdbId = await searchTMDb(movieTitle || maoyanId);
+  if (!tmdbId) {
+    throw new Error('TMDb搜索无结果');
+  }
+  
+  // 第三步：获取TMDb详情
+  return await getTMDbDetail(tmdbId, maoyanId);
+}
+
+/**
+ * 在TMDb搜索电影
+ */
+function searchTMDb(query) {
+  return new Promise((resolve, reject) => {
+    const path = `/3/search/movie?api_key=${TMDB_API_KEY}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
+    
+    const options = {
+      hostname: TMDB_BASE_URL,
+      path: path,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    };
+    
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.results && json.results.length > 0) {
+            console.log(`🎬 TMDb找到${json.results.length}个结果，使用第一个`);
+            resolve(json.results[0].id);
+          } else {
+            reject(new Error('TMDb无搜索结果'));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+/**
+ * 获取TMDb电影详情
+ */
+function getTMDbDetail(tmdbId, maoyanId) {
+  return new Promise((resolve, reject) => {
+    const path = `/3/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=zh-CN`;
+    
+    const options = {
+      hostname: TMDB_BASE_URL,
+      path: path,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    };
+    
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          resolve({
+            id: maoyanId,
+            title: json.title || json.original_title || '未知电影',
+            summary: json.overview || '暂无剧情简介',
+            category: json.genres ? json.genres.map(g => g.name).join('/') : '未知',
+            country: json.production_countries ? json.production_countries.map(c => c.name).join('/') : '未知',
+            duration: json.runtime ? `${json.runtime}分钟` : '未知',
+            releaseDate: json.release_date || '未知',
+            director: '未知', // TMDb需要额外请求credits
+            actors: '暂无', // TMDb需要额外请求credits
+            score: json.vote_average ? String(json.vote_average.toFixed(1)) : '暂无评分',
+            ratingCount: json.vote_count ? String(json.vote_count) : '0'
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
 }
 
 /**
